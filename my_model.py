@@ -19,5 +19,11 @@ class sign_language_model(p3d):
         self.fc1 = nn.Linear(2*encode_output_size,encode_output_size,bias=True)
         self.fc2 = nn.Linear()
 
+
+    def forward(self,x):
+        out,hn = self.encode(x)
+        out,hn = self.decode(out,hn)
+        pass
+
 if __name__ == "__main__"
     pass
