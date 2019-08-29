@@ -1,1 +1,1 @@
-from models.p3d_encode import P3d64
+from utils.read_corpus import read_corpus
