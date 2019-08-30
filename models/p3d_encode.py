@@ -153,15 +153,16 @@ class Bottleneck(nn.Module):
 
 
 class P3D(nn.Module):
-
     def __init__(self, block, layers, modality='RGB',
-        shortcut_type='B', num_classes=400,dropout=0.5,ST_struc=('A','B','C')):
+        shortcut_type='B', num_classes=400,ST_struc=('A','B','C'), embed_size = 256, hidden_size = 256, enc_num_layers = 2, bidirectional = True):
         self.inplanes = 64
         super(P3D, self).__init__()
         # self.conv1 = nn.Conv3d(3, 64, kernel_size=7, stride=(1, 2, 2),
         #                        padding=(3, 3, 3), bias=False)
         self.input_channel = 3 if modality=='RGB' else 2  # 2 is for flow 
         self.ST_struc=ST_struc
+
+        self.embed_size, self.hidden_size = embed_size, hidden_size
 
         self.conv1_custom = nn.Conv3d(self.input_channel, 64, kernel_size=(1,7,7), stride=(1,2,2),
                                 padding=(0,3,3), bias=False)
@@ -179,22 +180,22 @@ class P3D(nn.Module):
         self.layer3 = self._make_layer(block, 256, layers[2], shortcut_type, stride=2)
         self.layer4 = self._make_layer(block, 512, layers[3], shortcut_type, stride=2)
 
-        self.conv5 = nn.Conv2d(512 * block.expansion, 512 * block.expansion, kernel_size=(5,5), stride=1,
+        self.conv5 = nn.Conv2d(512 * block.expansion, 512 * block.expansion//2, kernel_size=(5,5), stride=1,
                                 padding=(0,1), bias=False)
-        self.bn5 = nn.BatchNorm2d(512 * block.expansion)
+        self.bn5 = nn.BatchNorm2d(512 * block.expansion//2)
 
-        self.conv6 = nn.Conv2d(512 * block.expansion, 512*block.expansion//2 ,kernel_size=(1,1),stride = 1,padding = 0,bias = False)
-        self.bn6 = nn.BatchNorm2d(512*block.expansion//2)
+        self.conv6 = nn.Conv2d(512 * block.expansion//2, embed_size ,kernel_size=(1,1),stride = 1,padding = 0,bias = False)
+        self.bn6 = nn.BatchNorm2d(embed_size)
 
         self.avgpool = nn.AvgPool2d(kernel_size=(5, 5), stride=1)                              # pooling layer for res5.
-        self.dropout=nn.Dropout(p=dropout)
         self.fc = nn.Linear(512 * block.expansion, num_classes)
 
-        src_size = 512 * block.expansion//2
-        self.rnn = nn.LSTM(src_size, 2*src_size,
-                    num_layers=2,
+        self.enc_num_layers = enc_num_layers
+        #256 256
+        self.rnn = nn.LSTM(embed_size, hidden_size,
+                    num_layers=self.enc_num_layers,
                     #dropout=dropout,
-                    bidirectional=True)
+                    bidirectional=bidirectional)
 
         for m in self.modules():
             if isinstance(m, nn.Conv3d):
@@ -287,15 +288,23 @@ class P3D(nn.Module):
         x = self.relu(self.bn6(x))
         #print("x6",x.size())
         x = self.avgpool(x)
-        x = x.view(-1,1024) #torch.Size([10, 2048])
+        #print(x.size())
+        x = x.view(-1,self.embed_size) #torch.Size([10, 2048])
         #x = self.fc(self.dropout(x))
         x = torch.unsqueeze(x,1)
-
-        h0 = torch.randn(4,1, 2048).cuda()
-        c0 = torch.randn(4,1, 2048).cuda()
         
-        out,hn  = self.rnn(x,(h0,c0))
-        return out,hn
+        h0 = torch.randn(2*self.enc_num_layers,1, self.hidden_size).cuda()
+        c0 = torch.randn(2*self.enc_num_layers,1, self.hidden_size).cuda()
+        
+        out,hc  = self.rnn(x,(h0,c0))
+        return out,hc
+
+
+def P3D19(**kwargs):
+    """Construct a P3D64 modelbased on a ResNet-50-3D model.
+    """
+    model = P3D(Bottleneck, [2, 2, 2, 2], **kwargs)
+    return model
 
 
 def P3D64(**kwargs):
@@ -402,10 +411,10 @@ def get_optim_policies(model=None,modality='RGB',enable_pbn=True):
 
 if __name__ == '__main__':
     torch.cuda.set_device(0)
-    model = P3D64()
+    model = P3D19()
     model = model.cuda()
-    data=torch.autograd.Variable(torch.rand(10,3,16,260,210)).cuda()   # if modality=='Flow', please change the 2nd dimension 3==>2
+    data=torch.autograd.Variable(torch.rand(2,3,16,260,210)).cuda()   # if modality=='Flow', please change the 2nd dimension 3==>2
     #print(model)
-    out,hn=model(data)
-    print (out.size(),out)
-    print(hn.size())
+    enc_hiddens, (Last_hidden, Last_cell)=model(data)
+    print (enc_hiddens.size())
+    print(Last_hidden.size())

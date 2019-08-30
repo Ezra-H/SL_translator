@@ -5,8 +5,8 @@ import pandas as pd
 import PIL.Image as Image
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
-from torchvision import transforms, utils
-from skimage import io, transform
+#from torchvision import transforms, utils
+#from skimage import io, transform
 
 class SignDataset(Dataset): 
     def __len__(self) -> int: 
