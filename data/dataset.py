@@ -9,10 +9,11 @@ from torch.utils.data import DataLoader
 #from skimage import io, transform
 
 class SignDataset(Dataset): 
-    def __len__(self) -> int: 
+    def __len__(self): 
+
         return self.len
     
-    def __init__(self, csv_file: str, root_dir: str, num_frames_per_clip = 16,transform=None) -> None: 
+    def __init__(self, csv_file: str, root_dir: str, num_frames_per_clip = 16,transform=None): 
         super().__init__() 
         self.root_dir = root_dir
         #lines=list(lines["video"])
@@ -20,7 +21,10 @@ class SignDataset(Dataset):
         self.len=len(self.datalist)
         self.num_frames_per_clip=num_frames_per_clip
         self.transform = transform
+
+
     def __getitem__(self, index:int): 
+        # return the N clips video, sequence
         data_dir=self.datalist["name"][index]
         img_label =self.datalist["translation"][index]
         img_datas=[]

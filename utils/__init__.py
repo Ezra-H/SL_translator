@@ -1,1 +1,1 @@
-from utils.read_corpus import read_corpus, read_vocab, model_embeddings
+from utils.reader import *

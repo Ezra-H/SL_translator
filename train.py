@@ -84,7 +84,7 @@ def evaluate_ppl(model, dev_data, batch_size=32):
     return ppl
 
 
-def compute_corpus_level_bleu_score(references: List[List[str]], hypotheses: List[Hypothesis]) -> float:
+def compute_corpus_level_bleu_score(references: List[List[str]], hypotheses: List[Hypothesis]):
     """ Given decoding results and reference sentences, compute corpus-level BLEU score.
     @param references (List[List[str]]): a list of gold-standard reference target sentences
     @param hypotheses (List[Hypothesis]): a list of hypotheses, one for each reference
@@ -97,7 +97,7 @@ def compute_corpus_level_bleu_score(references: List[List[str]], hypotheses: Lis
     return bleu_score
 
 
-def train(args: Dict):
+def train(args):
     """ Train the NMT Model.
     @param args (Dict): args from cmd line
     """
@@ -296,7 +296,7 @@ def decode(args: Dict[str, str]):
             f.write(hyp_sent + '\n')
 
 
-def beam_search(model: NMT, test_data_src: List[List[str]], beam_size: int, max_decoding_time_step: int) -> List[List[Hypothesis]]:
+def beam_search(model: NMT, test_data_src: List[List[str]], beam_size: int, max_decoding_time_step: int):
     """ Run beam search to construct hypotheses for a list of src-language sentences.
     @param model (NMT): NMT Model
     @param test_data_src (List[List[str]]): List of sentences (words) in source language, from test set.
@@ -323,9 +323,6 @@ def main():
     """ Main func.
     """
     args = docopt(__doc__)
-
-    # Check pytorch version
-    #assert(torch.__version__ == "1.0.0"), "Please update your installation of PyTorch. You have {} and you should have version 1.0.0".format(torch.__version__)
 
     # seed the random number generators
     seed = int(args['--seed'])

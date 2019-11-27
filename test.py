@@ -2,6 +2,8 @@ import torch
 import PIL.Image as Image
 import numpy as np
 from my_model import *
+
+
 if __name__ == "__main__":
     torch.cuda.set_device(0)
     vocab_path="F:/学习资料/基金项目-手语/nslt-master/Data/phoenix2014T.vocab.gloss"

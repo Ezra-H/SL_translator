@@ -154,7 +154,7 @@ class Bottleneck(nn.Module):
 
 class P3D(nn.Module):
     def __init__(self, block, layers, modality='RGB',
-        shortcut_type='B', num_classes=400,ST_struc=('A','B','C'), embed_size = 256, hidden_size = 256, enc_num_layers = 2, bidirectional = True):
+        shortcut_type='B', num_classes=400,ST_struc=('A','B','C'), embed_size = 256):
         self.inplanes = 64
         super(P3D, self).__init__()
         # self.conv1 = nn.Conv3d(3, 64, kernel_size=7, stride=(1, 2, 2),
@@ -162,7 +162,7 @@ class P3D(nn.Module):
         self.input_channel = 3 if modality=='RGB' else 2  # 2 is for flow 
         self.ST_struc=ST_struc
 
-        self.embed_size, self.hidden_size = embed_size, hidden_size
+        self.embed_size = embed_size
 
         self.conv1_custom = nn.Conv3d(self.input_channel, 64, kernel_size=(1,7,7), stride=(1,2,2),
                                 padding=(0,3,3), bias=False)
@@ -173,8 +173,7 @@ class P3D(nn.Module):
         self.cnt=0
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool3d(kernel_size=(2, 3, 3), stride=2, padding=(0,1,1))       # pooling layer for conv1.
-        self.maxpool_2 = nn.MaxPool3d(kernel_size=(2,1,1),padding=0,stride=(2,1,1))   # pooling layer for res2, 3, 4.
-
+        self.maxpool_2 = nn.MaxPool3d(kernel_size=(2,1,1),stride=(2,1,1),padding=0)   # pooling layer for res2, 3, 4.
         self.layer1 = self._make_layer(block, 64, layers[0], shortcut_type)
         self.layer2 = self._make_layer(block, 128, layers[1], shortcut_type, stride=2)
         self.layer3 = self._make_layer(block, 256, layers[2], shortcut_type, stride=2)
@@ -189,13 +188,6 @@ class P3D(nn.Module):
 
         self.avgpool = nn.AvgPool2d(kernel_size=(5, 5), stride=1)                              # pooling layer for res5.
         self.fc = nn.Linear(512 * block.expansion, num_classes)
-
-        self.enc_num_layers = enc_num_layers
-        #256 256
-        self.rnn = nn.LSTM(embed_size, hidden_size,
-                    num_layers=self.enc_num_layers,
-                    #dropout=dropout,
-                    bidirectional=bidirectional)
 
         for m in self.modules():
             if isinstance(m, nn.Conv3d):
@@ -275,14 +267,14 @@ class P3D(nn.Module):
 
         x = self.maxpool_2(self.layer1(x))  #  Part Res2
         x = self.maxpool_2(self.layer2(x))  #  Part Res3
-        x = self.maxpool_2(self.layer3(x))  #  Part Res4
+        x = self.layer3(x)                  #  Part Res4
 
         sizes=x.size()
         x = x.view(-1,sizes[1],sizes[3],sizes[4])  #  Part Res5
         x = self.layer4(x)
 
-        x = self.conv5(x)
-        x = self.relu(self.bn5(x))
+        x = self.relu(self.bn5(self.conv5(x)))
+
         #print("x5:",x.size())
         x = self.conv6(x)
         x = self.relu(self.bn6(x))
@@ -291,13 +283,8 @@ class P3D(nn.Module):
         #print(x.size())
         x = x.view(-1,self.embed_size) #torch.Size([10, 2048])
         #x = self.fc(self.dropout(x))
-        x = torch.unsqueeze(x,1)
-        
-        h0 = torch.randn(2*self.enc_num_layers,1, self.hidden_size).cuda()
-        c0 = torch.randn(2*self.enc_num_layers,1, self.hidden_size).cuda()
-        
-        out,hc  = self.rnn(x,(h0,c0))
-        return out,hc
+
+        return x
 
 
 def P3D19(**kwargs):
@@ -410,11 +397,12 @@ def get_optim_policies(model=None,modality='RGB',enable_pbn=True):
 
 
 if __name__ == '__main__':
-    torch.cuda.set_device(0)
+    
+    torch.cuda.set_device(1)
     model = P3D19()
     model = model.cuda()
-    data=torch.autograd.Variable(torch.rand(2,3,16,260,210)).cuda()   # if modality=='Flow', please change the 2nd dimension 3==>2
+    # input b,channel,clips,H,W
+    data=torch.autograd.Variable(torch.rand(67,3,8,260,210)).cuda()   # if modality=='Flow', please change the 2nd dimension 3==>2
     #print(model)
-    enc_hiddens, (Last_hidden, Last_cell)=model(data)
-    print (enc_hiddens.size())
-    print(Last_hidden.size())
+    feat=model(data)
+    print (feat.size())
