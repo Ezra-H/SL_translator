@@ -21,7 +21,7 @@
  - CTC optimizer method
 
 ## finished
- - data_loader
+ - data_loader -- chinese sign language dataset
  - encoder
  - batch is limited in 1
  - decoder
