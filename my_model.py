@@ -1,16 +1,17 @@
 import os
 import sys
 from typing import List, Tuple, Dict, Set, Union
+from collections import namedtuple
 import torch
 import torch.nn as nn
 import torch.nn.utils
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
-
+import numpy as np
 from models import *
 from data import *
 from utils import *
-
+Hypothesis = namedtuple('Hypothesis', ['value', 'score'])
 
 class sign_language_model(nn.Module):
     def __init__(self,args, vocab, embed_size=512, hidden_size=1024,enc_num_layers=2, dropout_rate=0.2):
@@ -18,23 +19,11 @@ class sign_language_model(nn.Module):
         self.args = args
 
         self.vocab = vocab
-        self.encoder = None
-        self.decoder = None
-
-        # 得到每个视频clip对应的词的概率
-        self.fc1 = nn.Linear(2*hidden_size,len(vocab),bias=True)
-        #self.fc2 = nn.Linear()
-
-        self.model_embeddings = nn.Embedding(len(vocab), embed_size)
-
-        #######
-        self.embed_size = embed_size
-        self.hidden_size = hidden_size
-        self.enc_num_layers = enc_num_layers
-        ####################
-        
         self.feat_extraction = P3D19()
-        
+        if args.freeze:
+            print('freeze 3D ResNet')
+            for p in self.parameters():
+                p.requires_grad=False
         self.encoder = nn.LSTM(embed_size, hidden_size,
                         num_layers=enc_num_layers,
                         dropout=dropout_rate,
@@ -42,6 +31,15 @@ class sign_language_model(nn.Module):
         self.lstm_decoder = nn.LSTMCell(embed_size+hidden_size, hidden_size,bias=True)
         self.ctc_decoder = None
 
+        # 得到每个视频clip对应的词的概率
+        self.fc1 = nn.Linear(2*hidden_size,len(vocab),bias=True)
+
+        self.model_embeddings = nn.Embedding(len(vocab), embed_size)
+
+        self.embed_size = embed_size
+        self.hidden_size = hidden_size
+        self.enc_num_layers = enc_num_layers
+        
         self.h_projection = nn.Linear(2*enc_num_layers*hidden_size,hidden_size,bias=False)#(Linear Layer with no bias), called W_{h} in the PDF.
         self.c_projection = nn.Linear(2*enc_num_layers*hidden_size,hidden_size,bias=False)#(Linear Layer with no bias)# called W_{c} in the PDF.
         # default values
@@ -76,7 +74,9 @@ class sign_language_model(nn.Module):
 
         # Zero out, probabilities for which we have nothing in the target text  # the position of the pad is the zero value
         # target_masks = (target != self.vocab['<pad>']).float()
-        target_masks = torch.ones(target.shape).float().cuda()
+        target_masks = torch.ones(target.shape).float()
+        if self.args.gpus[0] > -1:
+            target_masks = target_masks.cuda()
         
         # Compute log probability of generating true target words
         target_gold_words_log_prob = torch.gather(P, index=target[1:].unsqueeze(-1), dim=-1).squeeze(-1) * target_masks[1:]
@@ -87,6 +87,15 @@ class sign_language_model(nn.Module):
 
     def encode(self, source, source_lengths):
         # source is the images list
+
+        # ## 直接使用view来进行拼接，通过特征提取器一次完成提取工作。再使用view来还原维度。  有问题，内存爆炸：contiguous
+        # batch_size,seq_len,channel,num_clips,h,w = source.size()
+        # source = source.reshape(-1,channel,num_clips,h,w).contiguous()
+        # feats = self.feat_extraction(source)
+        # feats = feats.view(batch_size,seq_len,-1)
+        # feats = feats.permute(1,0,2) # 得到(len,b,embed_size)
+
+        # 单独一个一个输入，得到的再进行拼接
         feats = []
         for i in source:
             feat = self.feat_extraction(i) # 返回 (len,embed_size)
@@ -94,8 +103,11 @@ class sign_language_model(nn.Module):
         feats = torch.stack(feats,1)  # 得到(len,b,embed_size)
         b = feats.size()[1]
 
-        h0 = torch.randn(2*self.enc_num_layers,b, self.hidden_size).cuda()
-        c0 = torch.randn(2*self.enc_num_layers,b, self.hidden_size).cuda()
+        h0 = torch.randn(2*self.enc_num_layers,b, self.hidden_size)
+        c0 = torch.randn(2*self.enc_num_layers,b, self.hidden_size)
+        if self.args.gpus[0] > -1:
+            h0 = h0.cuda()
+            c0 = c0.cuda()
         
         enc_hiddens,(Last_hidden,Last_cell)  = self.encoder(feats,(h0,c0))
         enc_hiddens = enc_hiddens.permute(1,0,2)  # => (batch_size, seq_len, hidden_size)
@@ -185,14 +197,118 @@ class sign_language_model(nn.Module):
         return enc_masks
 
     def word2id(self, target):
-        
-        target_id = torch.zeros(target.shape).long()
-        if self.args.gpus[0] > -1:
-            target_id = target_id.cuda()
+        target_id = torch.ones((len(target),max([len(i) for i in target]))).long()
         for i in range(len(target)):
             for j in range(len(target[i])):
                 target_id[i][j] = self.vocab[target[i][j]]
+        if self.args.gpus[0] > -1:
+            target_id = target_id.cuda()
         return torch.t(target_id)
+    
+    def id2word(self,target):
+        return list(self.vocab)[target]
+
+    def beam_search(self, src_picts, beam_size=5, max_decoding_time_step=70):
+        """ Given a single source video, perform beam search, yielding translations in the target language.
+        @param src_sent (List[str]): a single source video (pictures)
+        @param beam_size (int): beam size
+        @param max_decoding_time_step (int): maximum number of time steps to unroll the decoding RNN
+        @returns hypotheses (List[Hypothesis]): a list of hypothesis, each hypothesis has two fields:
+                value: List[str]: the decoded target sentence, represented as a list of words
+                score: float: the log-likelihood of the target sentence
+        """
+        # src_sents_var = self.vocab.to_input_tensor([src_picts], self.device)
+
+        src_encodings, dec_init_vec = self.encode(src_picts, [len(src_picts)])
+        src_encodings_att_linear = self.att_projection(src_encodings)
+
+        h_tm1 = dec_init_vec
+        att_tm1 = torch.zeros(1, self.hidden_size)
+        if self.args.gpus[0] > -1:
+            att_tm1 = att_tm1.cuda()
+
+        eos_id = self.vocab['</s>']
+
+        hypotheses = [['<s>']]
+        hyp_scores = torch.zeros(len(hypotheses), dtype=torch.float)
+        if self.args.gpus[0] > -1:
+            hyp_scores = hyp_scores.cuda()
+        
+        completed_hypotheses = []
+
+        t = 0
+        while len(completed_hypotheses) < beam_size and t < max_decoding_time_step:
+            t += 1
+            hyp_num = len(hypotheses)
+
+            exp_src_encodings = src_encodings.expand(hyp_num,
+                                                     src_encodings.size(1),
+                                                     src_encodings.size(2))
+
+            exp_src_encodings_att_linear = src_encodings_att_linear.expand(hyp_num,
+                                                                           src_encodings_att_linear.size(1),
+                                                                           src_encodings_att_linear.size(2))
+
+            y_tm1 = torch.tensor([self.vocab[hyp[-1]] for hyp in hypotheses], dtype=torch.long)
+            
+            if self.args.gpus[0]>-1:
+                y_tm1 = y_tm1.cuda()
+
+            y_t_embed = self.model_embeddings(y_tm1)
+
+            x = torch.cat([y_t_embed, att_tm1], dim=-1)
+
+            (h_t, cell_t), att_t, _  = self.step(x, h_tm1, exp_src_encodings, exp_src_encodings_att_linear, enc_masks=None)
+
+            # log probabilities over target words
+            # log_p_t = F.log_softmax(self.target_vocab_projection(att_t), dim=-1)
+            log_p_t = F.log_softmax(self.fc2(att_t), dim=-1)
+            live_hyp_num = beam_size - len(completed_hypotheses)
+            contiuating_hyp_scores = (hyp_scores.unsqueeze(1).expand_as(log_p_t) + log_p_t).view(-1)
+            top_cand_hyp_scores, top_cand_hyp_pos = torch.topk(contiuating_hyp_scores, k=live_hyp_num)
+
+            prev_hyp_ids = top_cand_hyp_pos / len(self.vocab)
+            hyp_word_ids = top_cand_hyp_pos % len(self.vocab)
+
+            new_hypotheses = []
+            live_hyp_ids = []
+            new_hyp_scores = []
+
+            for prev_hyp_id, hyp_word_id, cand_new_hyp_score in zip(prev_hyp_ids, hyp_word_ids, top_cand_hyp_scores):
+                prev_hyp_id = prev_hyp_id.item()
+                hyp_word_id = hyp_word_id.item()
+                cand_new_hyp_score = cand_new_hyp_score.item()
+
+                hyp_word = self.id2word(hyp_word_id)
+                new_hyp_sent = hypotheses[prev_hyp_id] + [hyp_word]
+                if hyp_word == '</s>':
+                    completed_hypotheses.append(Hypothesis(value=new_hyp_sent[1:-1],
+                                                           score=cand_new_hyp_score))
+                else:
+                    new_hypotheses.append(new_hyp_sent)
+                    live_hyp_ids.append(prev_hyp_id)
+                    new_hyp_scores.append(cand_new_hyp_score)
+
+            if len(completed_hypotheses) == beam_size:
+                break
+
+            live_hyp_ids = torch.tensor(live_hyp_ids, dtype=torch.long)
+            if self.args.gpus[0] > -1:
+                live_hyp_ids = live_hyp_ids.cuda()
+            h_tm1 = (h_t[live_hyp_ids], cell_t[live_hyp_ids])
+            att_tm1 = att_t[live_hyp_ids]
+
+            hypotheses = new_hypotheses
+            hyp_scores = torch.tensor(new_hyp_scores, dtype=torch.float)
+            if self.args.gpus[0] > -1:
+                hyp_scores = hyp_scores.cuda()
+        if len(completed_hypotheses) == 0:
+            completed_hypotheses.append(Hypothesis(value=hypotheses[0][1:],
+                                                   score=hyp_scores[0].item()))
+
+        completed_hypotheses.sort(key=lambda hyp: hyp.score, reverse=True)
+
+        return completed_hypotheses
 
 if __name__ == "__main__":
     torch.cuda.set_device(0)

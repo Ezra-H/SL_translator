@@ -6,7 +6,6 @@ import PIL.Image as Image
 import random
 from torch.utils.data import Dataset,DataLoader
 from torchvision import transforms, utils
-#from skimage import io, transform
 
 class ChineseSignDataset(Dataset): 
     def __init__(self, root, csv_file, num_frames_per_clip = 8,skip_rate=4,transform=None): 
@@ -14,8 +13,8 @@ class ChineseSignDataset(Dataset):
         self.num_frames_per_clip=num_frames_per_clip
         self.tf = transform
         self.skip_rate = skip_rate
-
         self.root = root
+
         self.data=pd.read_csv(csv_file)
         self.dirs = ['%06d'%i for i in self.data['dir'].tolist()]
         self.label = self.data['label'].tolist()
@@ -75,7 +74,7 @@ class ChineseSignDataset(Dataset):
         for i in range(0,len(imgs)-num_frames_per_clip+1,self.skip_rate):
             img_clips.append(torch.stack(imgs[i:i+num_frames_per_clip]))
         img_clips = torch.stack(img_clips)
-        return img_clips.contiguous()
+        return img_clips
 
 if __name__  == "__main__":
     csv_file = "/data/shanyx/hrh/sign/ccsl/corpus.csv"

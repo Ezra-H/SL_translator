@@ -60,7 +60,7 @@ parser.add_argument(
 parser.add_argument(
     '--workers',
     type=int,
-    default=8,
+    default=5,
     metavar='W',
     help='how many training processes to use (default: 10)')
 parser.add_argument(
@@ -83,11 +83,11 @@ parser.add_argument(
     help='maximum length of an episode (default: 20000)')
 parser.add_argument(
     '--vocab',
-    default='/data/shanyx/hrh/sign/ccsl/vocab.csv',
-    metavar='ENV',
+    default='/data/shanyx/hrh/sign/weather/vocab/phoenix2014T.vocab.de',
+    metavar='vo',
     help='The vocab path (default: /data/shanyx/hrh/sign/ccsl/vocab.csv)')
 parser.add_argument(
-    '--load', default=True, metavar='L', help='load a trained model')
+    '--load', default=False, metavar='L', help='load a trained model')
 parser.add_argument(
     '--save_step',
     default=10,
@@ -126,26 +126,26 @@ parser.add_argument(
 parser.add_argument(
     '--save_path',
     type=str,
-    default='./checkpoints/model.pth',
+    default='./checkpoints/model_weather.pth',
     metavar='CG',
     help='the path to save the model (default:./checkpoints/model.pth')
 parser.add_argument(
     '--patience',
     type=int,
     default=5,
-    metavar='P',
+    metavar='CG',
     help='the patience to waiting the epoch alter (default:./checkpoints/model.pth')
 parser.add_argument(
-    '--max_num_trial',
+    '--max_num_trail',
     type=int,
     default=5,
     metavar='NT',
     help='(default: 5')
 parser.add_argument(
     '--freeze',
-    type=int,
-    default=0,
-    metavar='FZ',
+    type=bool,
+    default=False,
+    metavar='FR',
     help='freeze the 3D conv(default: False')
 parser.add_argument(
     '--batch_size',
@@ -159,40 +159,26 @@ def train_collate(batch):
     batch_size = len(batch)
     images = []
     labels = []
-    
-    # 图片补零准备
-    _,c,n,h,w = batch[0][0].size()
-    max_len = max([len(batch[b][0]) for b in range(batch_size)])
-    pad = torch.zeros((max_len,c,n,h,w))
-
-    # # 句子补零准备
-    # se_max_len = max([len(batch[b][1]) for b in range(batch_size)])
-    # se_pad = ['<\s>']*se_max_len
-
     for b in range(batch_size):
         if batch[b][0] is None:
             continue
         else:
-            temp = torch.zeros_like(pad)
-            temp[:len(batch[b][0]),:,:,:,:] = batch[b][0]
-            images.append(temp)  # 已经对图片进行对齐操作
+            images.append(batch[b][0])  # 对于视频的补长还待研究，主要是现在没有那么大的显存来载入这些图片。
             labels.append(batch[b][1])
     images = torch.stack(images, 0)
+    labels = np.array(labels)
     return images, labels
 
 
-def evaluate_ppl(args, model, dev_dataset):
+def evaluate_ppl(args, model, vail_loader):
+    # waiting to correct
+
     """ Evaluate perplexity on dev sentences
     @param model (NMT): NMT Model
     @param dev_data (list of (src_sent, tgt_sent)): list of tuples containing source and target sentence
     @param batch_size (batch size)
     @returns ppl (perplixty on dev sentences)
     """
-    vail_loader = DataLoader(dataset=dev_dataset,
-                            batch_size=args.batch_size,   #现在只能load一个batch，但是一个batch中有一组图片，对应一个翻译
-                            shuffle=True,
-                            collate_fn=train_collate,
-                            num_workers=args.workers)
 
     was_training = model.training
     model.eval()
@@ -237,25 +223,32 @@ def train(args):
     @param args (Dict): args from cmd line
     """
 
-    root_dir = "/data/shanyx/hrh/sign/ccsl/picture_cut/"
-    csv_file = "/data/shanyx/hrh/sign/ccsl/corpus.csv"
+    root_dir = "/data/shanyx/hrh/sign/weather/feature/"
+    train_csv_file = "/data/shanyx/hrh/sign/weather/manual/PHOENIX.train.csv"
+    vail_csv_file = "/data/shanyx/hrh/sign/weather/manual/PHOENIX.dev.csv"
+
     tf = transforms.Compose([
             transforms.Resize((260,210)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean = (0.5, 0.5, 0.5), std = (0.5, 0.5, 0.5))
+            transforms.ToTensor()
             ])
 
-    train_dataset = ChineseSignDataset(root_dir,csv_file,num_frames_per_clip=8,transform=tf)
+    train_dataset = WeatherSignDataset(root_dir,train_csv_file,mode='train',num_frames_per_clip=8,transform=tf)
     train_loader = DataLoader(dataset=train_dataset,
-                            batch_size=args.batch_size,   #现在只能load一个batch，但是一个batch中有一组图片，对应一个翻译
+                            batch_size=1,   #现在只能load一个batch，但是一个batch中有一组图片，对应一个翻译
                             shuffle=True,
                             collate_fn=train_collate,
                             num_workers=args.workers)
     
+    vail_dataset = WeatherSignDataset(root_dir,vail_csv_file,mode='vail',num_frames_per_clip=8,transform=tf)
+    vail_loader = DataLoader(dataset=vail_dataset,
+                            batch_size=1,   #现在只能load一个batch，但是一个batch中有一组图片，对应一个翻译
+                            shuffle=True,
+                            collate_fn=train_collate,
+                            num_workers=args.workers)
     clip_grad = args.clip_grad
 
-    vocab = read_vocab(args.vocab)
-    
+    vocab = read_vocab_from_txt(args.vocab)
+
     model = sign_language_model(embed_size=args.embedding_size,
                 hidden_size=args.hidden_size,
                 dropout_rate=args.dropout,
@@ -265,7 +258,7 @@ def train(args):
     
 
     uniform_init = args.uniform_init
-    if np.abs(uniform_init) > 0. and not args.load:
+    if np.abs(uniform_init) > 0.:
         print('uniformly initialize parameters [-%f, +%f]' % (uniform_init, uniform_init), file=sys.stderr)
         for p in model.parameters():
             p.data.uniform_(-uniform_init, uniform_init)
@@ -274,17 +267,10 @@ def train(args):
 
     #load model
     if args.load:
-        if args.gpus[0]>-1:
-            model.load_state_dict(torch.load(args.save_path))
-        else:
-            model.load_state_dict(torch.load(args.save_path,map_location=torch.device('cpu')))
-        print('load parameters of model', file=sys.stderr)
-
+        model.load_state_dict(torch.load(args.save_path))
+        print('restore parameters of the optimizers', file=sys.stderr)
     if args.gpus[0] > -1:
-        if len(args.gpus)>1:
-            model = nn.DataParallel(model.cuda())
-        else:
-            model = model.cuda()
+        model = model.cuda()
     num_trial = patience = cum_loss = report_loss = cum_tgt_words = report_tgt_words = 0
     cum_examples = report_examples = epoch = valid_num = 0
     hist_valid_scores = []
@@ -349,7 +335,7 @@ def train(args):
             print('begin validation ...', file=sys.stderr)
 
             # compute dev. ppl and bleu
-            dev_ppl = evaluate_ppl(args, model, Subset(train_dataset,np.random.randint(0,len(train_dataset),1000)))   # dev batch size can be a bit larger
+            dev_ppl = evaluate_ppl(args, model, vail_loader)   # dev batch size can be a bit larger
             valid_metric = -dev_ppl
 
             print('validation: iter %d, dev. ppl %f' % (epoch, dev_ppl), file=sys.stderr)
