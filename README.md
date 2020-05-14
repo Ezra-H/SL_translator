@@ -12,6 +12,7 @@ Translating a sign language video into a word or a sentence.
 ## Table of Contents
 
 - [Background](#background)
+- [DataSetUsed](#DataSetUsed)
 - [Install](#install)
 - [Usage](#usage)
 - [Result](#Result)
@@ -26,7 +27,7 @@ Thanks to the development of deep learning, methods based on deep learning made 
 The problem of sign language recognition can be transformed into a deep learning method based on Seq2Seq. 
 In this project, we address the sign language recognition on a dataset with 500 words. The project is supported by Open Fund of Sun Yat-sen University
 
-## DataSet Used
+## DataSetUsed
 
 The dataset we used was published by USTC. The dataset includes 500 words, 50 videos for each word. For one word, the 50 videos was shoted by different people. This The whole dataset can be downloaded in this [link](http://home.ustc.edu.cn/~pjh/openresources/slr/index.html)
 
