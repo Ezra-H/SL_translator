@@ -11,8 +11,6 @@ from torch.utils.data import DataLoader
 import cv2
 import numpy as np
 
-save_dir = "H:/Crop"
-
 
 def get_middle(img_raw):
     #cv2.imshow("1", img_raw)
@@ -38,32 +36,33 @@ def get_middle(img_raw):
 def collate_fn1(data):
     return data[0]
 
+if __name__ == "__main__":
+    save_dir = "H:/Crop"
+    dataloader = DataLoader(dataset=SLR_Dataset.SLR_Dataset(mode="Raw"), batch_size=1, shuffle=False, collate_fn=collate_fn1)
+    for index, (data_path, label) in enumerate(dataloader):
+        label = 58
+        data_path = "H:/SLRT/SLR_dataset/xf500_color_video/58/20.avi"
+        person_index = int(pathlib.Path(data_path).stem)
+        print(index, label, person_index)
+        #if person_index != 20 and label != 488:
+        #    continue
+        saveVideo_dir = os.path.join(save_dir, str(label), pathlib.Path(data_path).name)
 
-dataloader = DataLoader(dataset=SLR_Dataset.SLR_Dataset(mode="Raw"), batch_size=1, shuffle=False, collate_fn=collate_fn1)
-for index, (data_path, label) in enumerate(dataloader):
-    label = 58
-    data_path = "H:/SLRT/SLR_dataset/xf500_color_video/58/20.avi"
-    person_index = int(pathlib.Path(data_path).stem)
-    print(index, label, person_index)
-    #if person_index != 20 and label != 488:
-    #    continue
-    saveVideo_dir = os.path.join(save_dir, str(label), pathlib.Path(data_path).name)
+        videoFile = cv2.VideoCapture(data_path)
+        fourcc = cv2.VideoWriter_fourcc(*'MPEG')
+        fps = videoFile.get(5)
+        frameCounts = int(videoFile.get(7)-1)
+        out = cv2.VideoWriter(saveVideo_dir, fourcc, fps, (570, 570))
 
-    videoFile = cv2.VideoCapture(data_path)
-    fourcc = cv2.VideoWriter_fourcc(*'MPEG')
-    fps = videoFile.get(5)
-    frameCounts = int(videoFile.get(7)-1)
-    out = cv2.VideoWriter(saveVideo_dir, fourcc, fps, (570, 570))
+        _, _ = videoFile.read()
+        for ii in range(frameCounts):
+            check, frame = videoFile.read()
+            if ii == 0:
+                middle, top = get_middle(frame)
+            temp = frame[top:top+570, middle-285:middle+285, :]
+            out.write(temp)
+        cv2.imwrite(saveVideo_dir[:-4]+".jpg", temp)
+        out.release()
 
-    _, _ = videoFile.read()
-    for ii in range(frameCounts):
-        check, frame = videoFile.read()
-        if ii == 0:
-            middle, top = get_middle(frame)
-        temp = frame[top:top+570, middle-285:middle+285, :]
-        out.write(temp)
-    cv2.imwrite(saveVideo_dir[:-4]+".jpg", temp)
-    out.release()
-
-    if (index+1) % 100 == 0:
-        print ("%d / %d RUNNING..." % (index+1, len(dataloader)))
+        if (index+1) % 100 == 0:
+            print ("%d / %d RUNNING..." % (index+1, len(dataloader)))

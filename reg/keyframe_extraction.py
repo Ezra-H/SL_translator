@@ -138,71 +138,72 @@ def takeSecond(elem):
 
 
 import os
-k_num = 10
+if __name__ == "__main__":
+    k_num = 10
 
-src_dir = "/data/shanyx/SLR/Crop"
-des_dir = "/data/shanyx/SLR/Crop_keyframe"
+    src_dir = "/data/shanyx/SLR/Crop"
+    des_dir = "/data/shanyx/SLR/Crop_keyframe"
 
-for ii in range(500):
-    print(ii)
-    for jj in range(50):
-        data_path = os.path.join(src_dir, str(ii), str(jj)+".avi")
-        out_path = os.path.join(des_dir, str(ii), str(jj)+".avi")
-        videoFile = cv2.VideoCapture(data_path)
-        width = int(videoFile.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(videoFile.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps, z = videoFile.get(5), 0
-        fourcc = cv2.VideoWriter_fourcc(*'MPEG')
-        videoOutputFile = cv2.VideoWriter(out_path, fourcc, fps, (570, 570))
-        flow = OpticalFlowCalculator(width,
-                                     height,
-                                     # window_name='Optical Flow',
-                                     scaledown=1,
-                                     move_step=16)
+    for ii in range(500):
+        print(ii)
+        for jj in range(50):
+            data_path = os.path.join(src_dir, str(ii), str(jj)+".avi")
+            out_path = os.path.join(des_dir, str(ii), str(jj)+".avi")
+            videoFile = cv2.VideoCapture(data_path)
+            width = int(videoFile.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(videoFile.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            fps, z = videoFile.get(5), 0
+            fourcc = cv2.VideoWriter_fourcc(*'MPEG')
+            videoOutputFile = cv2.VideoWriter(out_path, fourcc, fps, (570, 570))
+            flow = OpticalFlowCalculator(width,
+                                        height,
+                                        # window_name='Optical Flow',
+                                        scaledown=1,
+                                        move_step=16)
 
-        ret, frame = videoFile.read()
-        data = []
-        plt.cla()
-        count = 0
-        vals = []
-        frames = []
-        while ret:
-            xvel, yvel = flow.processFrame(frame)
-            val = xvel * xvel + yvel * yvel
-            if val < 0.002:
-                vals.append((val,count))
-            frames.append(frame)
-            data.append(math.log(xvel * xvel + yvel * yvel + 1))
             ret, frame = videoFile.read()
-            count += 1
+            data = []
+            plt.cla()
+            count = 0
+            vals = []
+            frames = []
+            while ret:
+                xvel, yvel = flow.processFrame(frame)
+                val = xvel * xvel + yvel * yvel
+                if val < 0.002:
+                    vals.append((val,count))
+                frames.append(frame)
+                data.append(math.log(xvel * xvel + yvel * yvel + 1))
+                ret, frame = videoFile.read()
+                count += 1
 
-        kmeans = KMeans(n_clusters=k_num)
-        kmeans.fit(vals)
-        kmeans_y_predict = kmeans.predict(vals)
-        # print('frame:', len(frames))
+            kmeans = KMeans(n_clusters=k_num)
+            kmeans.fit(vals)
+            kmeans_y_predict = kmeans.predict(vals)
+            # print('frame:', len(frames))
 
-        indexs = [[] for k in range(k_num) ]
-        final = []
-        for k in range(k_num):
-            min_vals = []
-            min_coun = []
-            for index, num in enumerate(kmeans_y_predict.tolist()):
-                if num == k:
-                    indexs[k].append(index)
-            for index in indexs[k]:
-                va = vals[index][0]
-                cou = vals[index][1]
-                min_vals.append(va)
-                min_coun.append(cou)
-            min_index = min_coun[min_vals.index(min(min_vals))]
-            final.append((frames[min_index], min_index))
+            indexs = [[] for k in range(k_num) ]
+            final = []
+            for k in range(k_num):
+                min_vals = []
+                min_coun = []
+                for index, num in enumerate(kmeans_y_predict.tolist()):
+                    if num == k:
+                        indexs[k].append(index)
+                for index in indexs[k]:
+                    va = vals[index][0]
+                    cou = vals[index][1]
+                    min_vals.append(va)
+                    min_coun.append(cou)
+                min_index = min_coun[min_vals.index(min(min_vals))]
+                final.append((frames[min_index], min_index))
 
-        final.sort(key=takeSecond)
-        txt_path = os.path.join(des_dir, str(ii), str(jj) + ".txt")
-        with open(txt_path, "w") as f:
-            for fin, fi_index in final:
-                videoOutputFile.write(fin)
-                f.write(str(fi_index))
-                f.write("\n")
-                #cv2.imwrite('img' + "/" + str(i) + '/' + str(fi_index) + '.jpg', fin)
-        videoOutputFile.release()
+            final.sort(key=takeSecond)
+            txt_path = os.path.join(des_dir, str(ii), str(jj) + ".txt")
+            with open(txt_path, "w") as f:
+                for fin, fi_index in final:
+                    videoOutputFile.write(fin)
+                    f.write(str(fi_index))
+                    f.write("\n")
+                    #cv2.imwrite('img' + "/" + str(i) + '/' + str(fi_index) + '.jpg', fin)
+            videoOutputFile.release()

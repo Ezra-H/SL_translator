@@ -50,14 +50,21 @@ Click this [link](https://github.com/baidu-research/warp-ctc) to install the war
 
 ## Usage
 
-### training
+### recognition
 
-Executing the train.sh to train the network
+Executing the train_reg.sh to train the network
+```
+sh train_reg.sh
+```
+
+### translation
+
+Executing the train_slt.sh to train the network
 
 ```
-sh train.sh
+sh train_slt.sh
 ```
-You can aslo directly execute the train.py to customize your training.
+You can aslo directly execute the train_slt.py to customize your training.
 ```
 train.py [-h] [--train_src INPUT_DATA_PATH]    
                    [--vail_src EVALUATE_DATA_PATH] [--vocab VOCABULATRY_PATH]    
@@ -66,12 +73,10 @@ train.py [-h] [--train_src INPUT_DATA_PATH]
                    ...
 ```
 
-### evaluating
-
-Executing the vail.sh to evaluate the network
+Executing the vail_slt.sh to evaluate the network
 
 ```
-sh vail.sh
+sh vail_slt.sh
 ```
 
 ## Results

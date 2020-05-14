@@ -1,39 +1,12 @@
+
 import os
 import sys
 import numpy
 import torch
-import torch.nn as nn
 # import SLR_Dataset
 from torch.utils.data import DataLoader
-
-
-class Neural_Classifier_gru(torch.nn.Module):
-    def __init__(self, feature_size, hidden_size, num_layers):
-        super(Neural_Classifier_gru, self).__init__()
-        self.gru = nn.GRU(input_size=feature_size, hidden_size=hidden_size, batch_first=True, num_layers=num_layers, bidirectional=True)
-        self.linear = torch.nn.Linear(hidden_size*2, 500)
-
-    def forward(self, data):
-        # can be optimized for more effective use of memory
-        out, _ = self.gru(data,)
-        unpacked = torch.nn.utils.rnn.pad_packed_sequence(out, batch_first=True)
-        last = unpacked[0][range(unpacked[0].shape[0]), unpacked[1]-1]
-        #print(torch.mean(last), torch.var(last))
-        last = self.linear(last)
-        return last
-
-
-if __name__ == '__main__':
-    # python Recognition_Sample.py [cuda_index] [num_workers] [batch_size] [hidden_size]
-    # [epoch_counts] [learning_rate] [from_scratch] [modelPath]
-    # cd /home/shanyx/anaconda3/bin
-    # conda activate hrh_pytorch
-    # cd /data/shanyx/will/Sign\ Language\ Translation
-    # python Recognition_GRU.py shanyx 3 8 32 512 25 0.0001 0 Hand_Resnet101 /data/shanyx/SLR/model/Hand_Resnet101_Gru_0.0001_3_512.pth 3
-    # python Recognition_Sample.py hk1 0 16 32 30 200 0.00001 0 Resnet50 /data/hk1/Goolo/hjj/SLR_Data/model/resnet50_sample30_0.00001.pth
-
-    # python Recognition_GRU.py shanyx 3 8 32 512 25 0.0001 0 Efficientnet3 /data/shanyx/SLR/model/Effienctnet3_Gru_0.0001_3_512.pth 3
-
+from reg import *
+if __name__ == "__main__":
     server = sys.argv[1]
     torch.cuda.set_device(int(sys.argv[2]))
     num_workers = int(sys.argv[3])
@@ -77,11 +50,11 @@ if __name__ == '__main__':
         feature_type = checkpoint['feature_type']
         hidden_size = checkpoint['hidden_size']
         num_layers = checkpoint['num_layers']
-        model = Neural_Classifier(feature_size, hidden_size, num_layers)
+        model = Neural_Classifier_sample(feature_size, hidden_size, num_layers)
         model.load_state_dict(checkpoint['model_state_dict'])
         print("Model loaded from \""+str(modelPath)+"\"")
     else:
-        model = Neural_Classifier(feature_size, hidden_size, num_layers)
+        model = Neural_Classifier_sample(feature_size, hidden_size, num_layers)
 
     print("server: ", sys.argv[1])
     print("cuda_index: ", sys.argv[2])

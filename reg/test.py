@@ -121,29 +121,29 @@ class OpticalFlowCalculator:
         return velocity_pixels_per_second / pixels_per_meter
 
 
+if __name__ == "__main__":
+    #for ii in range(50):
+    #data_path = "C:/Users/Administrator/Desktop/134/"+str(i)+".avi"
+    data_path = "C:/Users/Administrator/Desktop/1.avi"
+    videoFile = cv2.VideoCapture(data_path)
 
-#for ii in range(50):
-#data_path = "C:/Users/Administrator/Desktop/134/"+str(i)+".avi"
-data_path = "C:/Users/Administrator/Desktop/1.avi"
-videoFile = cv2.VideoCapture(data_path)
+    width = int(videoFile.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(videoFile.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    flow = OpticalFlowCalculator(width, height, window_name='Optical Flow', scaledown=1, move_step=16)
 
-width = int(videoFile.get(cv2.CAP_PROP_FRAME_WIDTH))
-height = int(videoFile.get(cv2.CAP_PROP_FRAME_HEIGHT))
-flow = OpticalFlowCalculator(width, height, window_name='Optical Flow', scaledown=1, move_step=16)
-
-ret, frame = videoFile.read()
-data = []
-while ret:
-    xvel, yvel, _ = flow.processFrame(frame)
-    #img_gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-    print(xvel*xvel+yvel*yvel)
-    data.append(math.log(xvel*xvel+yvel*yvel+1))
     ret, frame = videoFile.read()
-print(data)
+    data = []
+    while ret:
+        xvel, yvel, _ = flow.processFrame(frame)
+        #img_gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+        print(xvel*xvel+yvel*yvel)
+        data.append(math.log(xvel*xvel+yvel*yvel+1))
+        ret, frame = videoFile.read()
+    print(data)
 
-x1 = range(len(data))
-plt.plot(x1, data, label='loss_history',
-         linewidth=3, color='pink',marker='o',
-         markerfacecolor='blue',markersize=5)
-plt.savefig("C:/Users/Administrator/Desktop/1.jpg")
-plt.show()
+    x1 = range(len(data))
+    plt.plot(x1, data, label='loss_history',
+            linewidth=3, color='pink',marker='o',
+            markerfacecolor='blue',markersize=5)
+    plt.savefig("C:/Users/Administrator/Desktop/1.jpg")
+    plt.show()

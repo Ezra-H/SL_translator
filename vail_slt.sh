@@ -1,0 +1,1 @@
+python vail_slt.py --feature R2Plus1D19 --save_path ./checkpoints/model.pth --vail_src ./data/picture/ --vocab ./data/vocab/phoenix2014T.vocab.de

@@ -2,13 +2,13 @@ import os
 import sys
 import numpy
 import torch
-import SLR_Dataset
+# import SLR_Dataset
 from torch.utils.data import DataLoader
 
 
-class Neural_Classifier(torch.nn.Module):
+class Neural_Classifier_sample(torch.nn.Module):
     def __init__(self, feature_size):
-        super(Neural_Classifier, self).__init__()
+        super(Neural_Classifier_sample, self).__init__()
         self.linear = torch.nn.Linear(feature_size, 500)
 
     def forward(self, data):

@@ -1,1 +1,0 @@
-python train.py --feature R2Plus1D19 --workers 6 --train_src ./data/ccsl/picture/ --vail_src ./data/picture/ --vocab ./data/vocab/phoenix2014T.vocab.de
