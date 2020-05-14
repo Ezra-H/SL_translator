@@ -42,11 +42,11 @@ pip install -r requirements.txt
 Other modules are extra options to install.
 
 ### openpose
-Click this [link](https://github.com/baidu-research/warp-ctc) to install the openpose module.
+Click this [link](https://github.com/baidu-research/warp-ctc) to install the openpose.
 
 ### warp-ctc
 
-Click this [link](https://github.com/baidu-research/warp-ctc) to install the warp-ctc module.
+Click this [link](https://github.com/baidu-research/warp-ctc) to install the warp-ctc.
 
 ## Usage
 
@@ -106,15 +106,3 @@ sh vail.sh
 Created by Huang Jianjie, Huang Runhui, Cui liangyu, Chen Zibo, Chen Xuechen.
 
 We welcome improvements from the community, please feel free to submit pull requests.
-
-<!-- See [the contributing file](CONTRIBUTING.md)!
-
-PRs accepted.
-
-Small note: If editing the Readme, please conform to the [standard-readme](https://github.com/RichardLitt/standard-readme) specification.
-
-### Any optional sections
-
-## License
-
-[MIT © Richard McRichface.](../LICENSE) -->
