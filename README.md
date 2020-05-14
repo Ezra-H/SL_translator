@@ -66,7 +66,7 @@ train.py [-h] [--train_src INPUT_DATA_PATH]
                    ...
 ```
 
-### vailing
+### evaluating
 
 Executing the vail.sh to evaluate the network
 
