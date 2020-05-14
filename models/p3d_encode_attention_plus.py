@@ -39,7 +39,7 @@ def downsample_basic_block(x, planes, stride):
 class Bottleneck(nn.Module):
     expansion = 4
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None,n_s=0,depth_3d=47,ST_struc=('A','B','C')):
+    def __init__(self, inplanes, planes, stride=1, downsample=None,n_s=0,depth_3d=47,ST_struc=('A','B','C'),reduction=16):
         super(Bottleneck, self).__init__()
         self.downsample = downsample
         self.depth_3d=depth_3d
@@ -82,7 +82,7 @@ class Bottleneck(nn.Module):
             self.conv4 = nn.Conv2d(planes, planes * 4, kernel_size=1, bias=False)
             self.bn4 = nn.BatchNorm2d(planes * 4)
         self.relu = nn.ReLU(inplace=True)
-
+        self.se_module = SEModule(planes * 4, reduction=reduction)
         self.stride = stride
         
     def ST_A(self,x):
@@ -143,32 +143,63 @@ class Bottleneck(nn.Module):
 
         out = self.conv4(out)
         out = self.bn4(out)
-
         if self.downsample is not None:
             residual = self.downsample(x)
-
-        out += residual
+        # print(residual.shape,self.se_module(out).shape)
+        out = self.se_module(out) + residual
         out = self.relu(out)
 
         return out
+class SEModule(nn.Module):
+    
+    def __init__(self, channels, reduction):
+        super(SEModule, self).__init__()
+        self.avg_pool2d = nn.AdaptiveAvgPool2d(1)
+        self.avg_pool3d = nn.AdaptiveAvgPool3d(1)
+        self.fc1 = nn.Conv2d(channels, channels // reduction, kernel_size=1,
+                             padding=0)
+        self.relu = nn.ReLU(inplace=True)
+        self.fc2 = nn.Conv2d(channels // reduction, channels, kernel_size=1,
+                             padding=0)
+        self.sigmoid = nn.Sigmoid()
 
-class SE_block(nn.Module):
-    def __init__(self,c):
-        super(SE_block,self).__init__()
-        self.pool = F.adaptive_avg_pool2d
-        self.fc1 = nn.Linear(c,c//16)
-        self.relu = F.relu
-        self.fc2 = nn.Linear(c//16,c)
-        self.sigmoid = torch.sigmoid
-    def forward(self,x):
-        x = self.pool(x,(1,1))
-        x=x.view(x.size()[0],-1)
+    def forward(self, x):
+        module_input = x
+        if len(module_input.size()) == 4:
+            x = self.avg_pool2d(x)
+        elif len(module_input.size()) == 5:
+            x = self.avg_pool3d(x).squeeze(3)
+        else:
+            assert False
+        # x = self.avg_pool(x)
         x = self.fc1(x)
         x = self.relu(x)
         x = self.fc2(x)
-
         x = self.sigmoid(x)
-        x=x.view(x.size()[0],-1,1,1)
+        # print(x.unsqueeze(3).shape,module_input.shape)
+        if len(module_input.size()) == 5:
+            x = x.unsqueeze(3)
+        return module_input * x
+
+class SE_strip(nn.Module):
+    def __init__(self,c):
+        super(SE_strip,self).__init__()
+        self.conv1 = nn.Conv2d(c,c//16,1)
+        self.relu = F.relu
+        self.conv2 = nn.Conv2d(c//16,c,1)
+        self.sigmoid = torch.sigmoid
+    def forward(self,x):
+        raw = x
+        x = torch.mean(x,-1,keepdim=True)
+        # print(x.shape)
+        x = self.conv1(x)
+        x = self.relu(x)
+        x = self.conv2(x)
+        x = torch.mean(x,1,keepdim=True)
+        x = self.sigmoid(x)
+        # x=x.view(x.size()[0],-1,1,1)
+        x = raw*x
+        # print(x.shape)
         return x
 
 class P3D(nn.Module):
@@ -204,13 +235,15 @@ class P3D(nn.Module):
         # self.conv6 = nn.Conv2d(512 * block.expansion//2, embed_size ,kernel_size=(1,1),stride = 1,padding = 0,bias = False)
         # self.bn6 = nn.BatchNorm2d(embed_size)
 
+        self.feat_attention = SE_strip(512 * block.expansion)
+
         self.conv5 = nn.Conv2d(512 * block.expansion, embed_size ,kernel_size=1,stride = 1,padding = 0,bias = False)
         self.bn5 = nn.BatchNorm2d(embed_size)
 
         # self.avgpool = nn.AvgPool2d(kernel_size=(5, 5), stride=1)                              # pooling layer for res5.
         # self.fc = nn.Linear(512 * block.expansion, num_classes)
 
-        self.feat_attention = SE_block(embed_size)
+        
 
         self.bottleneck_g = nn.BatchNorm1d(embed_size)  # global feat attention
 
@@ -243,13 +276,13 @@ class P3D(nn.Module):
     def _make_layer(self, block, planes, blocks, shortcut_type, stride=1):
         downsample = None
         stride_p=stride #especially for downsample branch.
-
         if self.cnt<self.depth_3d:
             if self.cnt==0:
                 stride_p=1
             else:
                 stride_p=(1,2,2)
             if stride != 1 or self.inplanes != planes * block.expansion:
+
                 if shortcut_type == 'A':
                     downsample = partial(downsample_basic_block,
                                          planes=planes * block.expansion,
@@ -294,34 +327,20 @@ class P3D(nn.Module):
         x = self.maxpool_2(self.layer1(x))  #  Part Res2
         x = self.maxpool_2(self.layer2(x))  #  Part Res3
         x = self.layer3(x)                  #  Part Res4
+        # sizes=x.size()
+        # x = x.view(-1,sizes[1],sizes[3],sizes[4])  #  Part Res5
+        x = self.layer4(x.squeeze(2))
 
-        sizes=x.size()
-        x = x.view(-1,sizes[1],sizes[3],sizes[4])  #  Part Res5
-        x = self.layer4(x)
+        x = self.feat_attention(x) # 得到
 
         x = self.relu(self.bn5(self.conv5(x)))
 
-        # print("x5:",x.size())
-        # x = self.conv6(x)
-        # x = self.relu(self.bn6(x))
-        # print("x6",x.size())
-
-
-        # x = self.avgpool(x)
-        # #print(x.size())
-        # x = x.view() #torch.Size([10, 2048])
-        #x = self.fc(self.dropout(x))
-
         # global_feat extraction
-        # print(x.shape)
-
-        # x = x*self.feat_attention(x) # 得到
-
         global_feat = F.avg_pool2d(x, x.size()[2:])
         global_feat = global_feat.view(-1,self.embed_size)  # become (b,c)#torch.Size([10, 2048])
-        # global_feat = F.dropout(global_feat, p=0.2)
-        # global_feat = self.bottleneck_g(global_feat)
-        # global_feat = self.l2_norm(global_feat)
+        global_feat = F.dropout(global_feat, p=0.2)
+        global_feat = self.bottleneck_g(global_feat)
+        global_feat = self.l2_norm(global_feat)
 
         return global_feat
 
@@ -334,7 +353,9 @@ class P3D(nn.Module):
 def P3D19(**kwargs):
     """Construct a P3D64 modelbased on a ResNet-50-3D model.
     """
+    # model = P3D(Bottleneck, [2, 2, 2, 2], **kwargs)
     model = P3D(Bottleneck, [2, 2, 2, 2], **kwargs)
+
     return model
 
 

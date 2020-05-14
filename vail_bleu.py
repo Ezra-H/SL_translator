@@ -8,12 +8,12 @@ import pandas as pd
 
 from docopt import docopt
 from nltk.translate.bleu_score import corpus_bleu, sentence_bleu, SmoothingFunction
-from my_model import sign_language_model,Hypothesis
+from model import sign_language_model,Hypothesis
 import numpy as np
 from tqdm import tqdm
 from utils import *
 from data import *
-
+from apex import amp
 import torch
 import torch.nn.utils
 import torch.nn as nn
@@ -37,7 +37,7 @@ parser.add_argument(
 parser.add_argument(
     '--embedding_size',
     type=int,
-    default=256,
+    default=512,
     metavar='Es',
     help='embedding_size (default: 256)')
 parser.add_argument(
@@ -67,20 +67,20 @@ parser.add_argument(
 parser.add_argument(
     '--train_src',
     type=str,
-    default='/data/shanyx/hrh/sign/ccsl/picture/',
+    default='./data/ccsl/picture/',
     metavar='NS',
     help='the path of source picture (default: /data/shanyx/hrh/sign/ccsl/picture/)')
 parser.add_argument(
     '--vail_src',
     type=str,
-    default='/data/shanyx/hrh/sign/ccsl/picture/',
+    default='./data/ccsl/picture/',
     metavar='NS',
     help='the path of source picture (default: /data/shanyx/hrh/sign/ccsl/picture/)')
 parser.add_argument(
     '--vocab',
-    default='/data/shanyx/hrh/sign/ccsl/vocab.csv',
+    default='./data/vocab/phoenix2014T.vocab.de',
     metavar='ENV',
-    help='The vocab path (default: /data/shanyx/hrh/sign/ccsl/vocab.csv)')
+    help='The vocab path (default: /data/shanyx/hrh/sign/weather/vocab/phoenix2014T.vocab.de)')
 parser.add_argument(
     '--load', default=True, metavar='L', help='load a trained model')
 parser.add_argument(
@@ -91,9 +91,9 @@ parser.add_argument(
 parser.add_argument(
     '--gpus',
     type=int,
-    default=[1],
+    default=[0],
     nargs='+',
-    help='GPUs to use [-1 CPU only] (default: -1)')
+    help='GPUs to use [-1 CPU only] (default: 0)')
 parser.add_argument(
     '--clip_num',
     type=int,
@@ -160,41 +160,45 @@ parser.add_argument(
     default='./checkpoints/predict.csv',
     metavar='OF',
     help='path to save the prediction, must be csv(default: ./checkpoints/predict.csv')
+parser.add_argument(
+    '--feature',
+    type=str,
+    default="R2Plus1D19",
+    metavar='Al',
+    help='feature extractor for extracting image feature,P3D19P,R2Plus1D19,efficient')
 
 
+# def evaluate_ppl(model, dev_data, batch_size=32):
+#     """ Evaluate perplexity on dev sentences
+#     @param model (NMT): NMT Model
+#     @param dev_data (list of (src_sent, tgt_sent)): list of tuples containing source and target sentence
+#     @param batch_size (batch size)
+#     @returns ppl (perplixty on dev sentences)
+#     """
+#     was_training = model.training
+#     model.eval()
 
+#     cum_loss = 0.
+#     cum_tgt_words = 0.
 
-def evaluate_ppl(model, dev_data, batch_size=32):
-    """ Evaluate perplexity on dev sentences
-    @param model (NMT): NMT Model
-    @param dev_data (list of (src_sent, tgt_sent)): list of tuples containing source and target sentence
-    @param batch_size (batch size)
-    @returns ppl (perplixty on dev sentences)
-    """
-    was_training = model.training
-    model.eval()
-
-    cum_loss = 0.
-    cum_tgt_words = 0.
-
-    # no_grad() signals backend to throw away all gradients
-    with torch.no_grad():
-        for src_sents, tgt_sents in batch_iter(dev_data, batch_size):
-            if args.gpus[0] > -1:
-                src_sents = src_sents.cuda()
+#     # no_grad() signals backend to throw away all gradients
+#     with torch.no_grad():
+#         for src_sents, tgt_sents,_,_ in tqdm(dev_data):
+#             if args.gpus[0] > -1:
+#                 src_sents = src_sents.cuda()
             
-            loss = -model(src_sents, tgt_sents).sum()
+#             loss = -model(src_sents, tgt_sents).sum()
 
-            cum_loss += loss.item()
-            tgt_word_num_to_predict = sum(len(s[1:]) for s in tgt_sents)  # omitting leading `<s>`
-            cum_tgt_words += tgt_word_num_to_predict
+#             cum_loss += loss.item()
+#             tgt_word_num_to_predict = sum(len(s[1:]) for s in tgt_sents)  # omitting leading `<s>`
+#             cum_tgt_words += tgt_word_num_to_predict
 
-        ppl = np.exp(cum_loss / cum_tgt_words)
+#         ppl = np.exp(cum_loss / cum_tgt_words)
 
-    if was_training:
-        model.train()
+#     if was_training:
+#         model.train()
 
-    return ppl
+#     return ppl
 
 
 def compute_corpus_level_bleu_score(references, hypotheses):
@@ -214,7 +218,8 @@ def train_collate(batch):
     batch_size = len(batch)
     images = []
     labels = []
-    
+    img_lens = []
+    label_lens = []
     # 图片补零准备
     _,c,n,h,w = batch[0][0].size()
     max_len = max([len(batch[b][0]) for b in range(batch_size)])
@@ -228,34 +233,43 @@ def train_collate(batch):
         if batch[b][0] is None:
             continue
         else:
+            img_lens.append(len(batch[b][0]))
+            label_lens.append(len(batch[b][1]))
+
             temp = torch.zeros_like(pad)
             temp[:len(batch[b][0]),:,:,:,:] = batch[b][0]
             images.append(temp)  # 已经对图片进行对齐操作
             labels.append(batch[b][1])
     images = torch.stack(images, 0)
-    return images, labels
+    return images, labels, img_lens, label_lens
+
 
 def decode(args):
     """ Performs decoding on a test set, and save the best-scoring decoding results.
     If the target gold-standard sentences are given, the function also computes
     corpus-level BLEU score.
     @param args (Dict): args from cmd line
-    """
-    root_dir = "/data/shanyx/hrh/sign/ccsl/picture/"
-    csv_file = "/data/shanyx/hrh/sign/ccsl/corpus.csv"
+    """    
+
+    root_dir = "/data/shanyx/hrh/sign/weather/feature/"
+    # test_csv_file = "/data/shanyx/hrh/sign/weather/manual/PHOENIX.test.csv"
+    test_csv_file = "/data/shanyx/hrh/sign/weather/manual/PHOENIX.train.csv"
+
     tf = transforms.Compose([
-            transforms.Resize((260,210)),
+            transforms.Resize((130,105)),
             transforms.ToTensor(),
             transforms.Normalize(mean = (0.5, 0.5, 0.5), std = (0.5, 0.5, 0.5))
             ])
 
-    vocab = read_vocab(args.vocab)
+    vocab = read_vocab_from_txt(args.vocab)
+
     model = sign_language_model(embed_size=args.embedding_size,
                 hidden_size=args.hidden_size,
                 dropout_rate=args.dropout,
                 vocab=vocab,
                 args=args)
     print("load model from {}".format(args.save_path), file=sys.stderr)
+    
     if args.gpus[0]>-1:
         model.load_state_dict(torch.load(args.save_path))
     else:
@@ -267,17 +281,17 @@ def decode(args):
         else:
             model = model.cuda()
 
-    train_dataset = ChineseSignDataset(root_dir,csv_file,num_frames_per_clip=8,transform=tf)
-    train_loader = DataLoader(dataset=train_dataset,
-                            batch_size=args.batch_size,   #现在只能load一个batch，但是一个batch中有一组图片，对应一个翻译
-                            shuffle=True,
+    test_dataset = sign_language_model(root_dir,test_csv_file,mode='train',num_frames_per_clip=8,transform=tf,skip_rate=4)
+    test_loader = DataLoader(dataset=test_dataset,
+                            batch_size=1,   #现在只能load一个batch，但是一个batch中有一组图片，对应一个翻译
+                            shuffle=False,
                             collate_fn=train_collate,
                             num_workers=args.workers)
 
     print("load test target sentences from [{}]".format(args.vocab), file=sys.stderr)
-    test_data_tgt = train_dataset.words
+    test_data_tgt = test_dataset.words
 
-    hypotheses = beam_search(model, train_loader,
+    hypotheses = beam_search(model, test_loader,
                              beam_size=args.beam_size,
                              max_decoding_time_step=args.max_decoding_time_step)
 
@@ -287,29 +301,36 @@ def decode(args):
         print('Corpus BLEU: {}'.format(bleu_score * 100), file=sys.stderr)
 
     # save hypotheses
-    test_name = train_dataset.dirs
+    test_name = test_dataset.dirs
     df = pd.DataFrame(columns=['names','hypotheses'],data=zip(test_name,hypotheses))
     df.to_csv(args.output_file,index=False)
 
 
-def beam_search(model, test_data_src, beam_size, max_decoding_time_step):
+def beam_search(model, test_dataloader, beam_size, max_decoding_time_step):
     """ Run beam search to construct hypotheses for a list of src-language sentences.
-    @param model (NMT): NMT Model
+    @param model (sign): sign Model
     @param test_data_src (List[List[str]]): List of sentences (words) in source language, from test set.
     @param beam_size (int): beam_size (# of hypotheses to hold for a translation at every step)
     @param max_decoding_time_step (int): maximum sentence length that Beam search can produce
     @returns hypotheses (List[List[Hypothesis]]): List of Hypothesis translations for every source sentence.
     """
+    # model, _ = amp.initialize(model, None, opt_level="O1")
+
     model.eval()
+    #test
+    hyp_word_list = []
 
     hypotheses = []
     with torch.no_grad():
-        for src_picts,__ in tqdm(test_data_src, desc='Decoding', file=sys.stdout):
+        for src_picts,__,_,_ in tqdm(test_dataloader, desc='Decoding', file=sys.stdout):
             if model.args.gpus[0] > -1:
                 src_picts = src_picts.cuda()
-            
-            example_hyps = model.beam_search(src_picts, beam_size=beam_size, max_decoding_time_step=max_decoding_time_step)
+
+            example_hyps = model.beam_search(src_picts, beam_size=1, max_decoding_time_step=max_decoding_time_step)
+            #print(example_hyps)
             hypotheses.append(example_hyps)
+    #print(hypotheses,'\n')
+    # print(hyp_word_list)
     return hypotheses
 
 

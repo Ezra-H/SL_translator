@@ -7,10 +7,15 @@ import torch.nn as nn
 import torch.nn.utils
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
+from warpctc_pytorch import CTCLoss
+from torch.utils.checkpoint import checkpoint
+from torch.optim import *
 import numpy as np
 from models import *
 from data import *
 from utils import *
+# import torchsnooper
+import math
 Hypothesis = namedtuple('Hypothesis', ['value', 'score'])
 
 class sign_language_model(nn.Module):
@@ -19,8 +24,16 @@ class sign_language_model(nn.Module):
         self.args = args
 
         self.vocab = vocab
-        self.feat_extraction = P3D19()
-        if args.freeze:
+        # self.feat_extraction = P3D19P()
+        if self.args.feature == "R2Plus1D19":
+            self.feat_extraction = R2Plus1D19()
+        elif self.args.feature == "P3D19P":
+            self.feat_extraction = P3D19P()
+        # elif self.args.feature == 'resnet19':
+        #     self.feat_extraction = P3D19P()
+        # elif self.args.feature == 'efficientnet-b3'
+        #     self.feat_extraction = efficientnet
+        if self.args.freeze:
             print('freeze 3D ResNet')
             for p in self.parameters():
                 p.requires_grad=False
@@ -29,7 +42,8 @@ class sign_language_model(nn.Module):
                         dropout=dropout_rate,
                         bidirectional=True)
         self.lstm_decoder = nn.LSTMCell(embed_size+hidden_size, hidden_size,bias=True)
-        self.ctc_decoder = None
+        # self.ctc_decoder = nn.CTCLoss(reduction='sum',zero_infinity=True)
+        self.ctc_decoder = CTCLoss(blank=0,length_average=True,size_average=True)#
 
         # 得到每个视频clip对应的词的概率
         self.fc1 = nn.Linear(2*hidden_size,len(vocab),bias=True)
@@ -48,44 +62,59 @@ class sign_language_model(nn.Module):
         self.fc2 = nn.Linear(hidden_size,len(vocab),bias=False)#(Linear Layer with no bias), called W_{vocab} in the PDF.
         self.dropout = nn.Dropout(p=dropout_rate)
 
+        self.LstmLoss = nn.CrossEntropyLoss() # reduction='sum'
         ############ 
-
-    def forward(self, source, target):
+    # @torchsnooper.snoop()
+    def forward(self, source, target, source_lengths, target_lengths):
         """
         @param source (List[List[str]]): list of source images, just one bunch
         @param target (List[List[str]]): list of target sentence tokens of the source images, wrapped by `<s>` and `</s>`
+        @param source_lengths (List[int]): list of length of the source images
+        @param target_lengths (List[int]): list of length of the target sentence, wrapped by `<s>` and `</s>`
 
         @returns scores (Tensor): a variable/tensor of shape (b, ) representing the
                                     log-likelihood of generating the gold-standard target sentence for
                                     each example in the input batch. Here b = batch size.
         """
-        source_lengths = [len(s) for s in source] # this len of these images from one sentence
-        enc_hiddens, dec_init_state = self.encode(source, source_lengths)
-        
-        Y_all=[]
-        for i in enc_hiddens:
-            Y_all.append(self.fc1(enc_hiddens))
-
-        target = self.word2id(target)  # tokenize   is the transpose matrix
+        enc_hiddens, dec_init_state = self.encode(source)
+        target_id = self.word2id(target)  # tokenize   is the transpose matrix
         enc_masks = self.generate_sent_masks(enc_hiddens, source_lengths)
-        combined_outputs = self.decode(enc_hiddens, enc_masks, dec_init_state, target)
+        combined_outputs = self.decode(enc_hiddens, enc_masks, dec_init_state, target_id)
         
-        P = F.log_softmax(self.fc2(combined_outputs), dim=-1)
-
-        # Zero out, probabilities for which we have nothing in the target text  # the position of the pad is the zero value
-        # target_masks = (target != self.vocab['<pad>']).float()
-        target_masks = torch.ones(target.shape).float()
-        if self.args.gpus[0] > -1:
-            target_masks = target_masks.cuda()
+        output = self.fc2(combined_outputs)
+        # print(output.argmax(2).view(-1),output.argmax(2).view(-1).shape,target_id.t(),target_id.t().shape)
+        # print(output.argmax(2).view(-1),output.argmax(2).shape,target_id.view(-1),target_id.view(-1).shape)
+        lloss = self.LstmLoss(output.view(-1,len(self.vocab)),target_id.t()[:,1:].view(-1))
+        # # Zero out, probabilities for which we have nothing in the target text  # the position of the pad is the zero value
+        # # target_masks = (target != self.vocab['<pad>']).float()
+        # target_masks = torch.ones(target_id.shape).float()
+        # if self.args.gpus[0] > -1:
+        #     target_masks = target_masks.cuda().requires_grad_()
         
-        # Compute log probability of generating true target words
-        target_gold_words_log_prob = torch.gather(P, index=target[1:].unsqueeze(-1), dim=-1).squeeze(-1) * target_masks[1:]
-        scores = target_gold_words_log_prob.sum(dim=0)
+        # # Compute log probability of generating true target words
+        # target_gold_words_log_prob = torch.gather(P, index=target_id[1:].unsqueeze(-1), dim=-1).squeeze(-1) * target_masks[1:]
+        # scores = target_gold_words_log_prob.sum(dim=0)
+
+        # Compute CTC Loss
+        Y_all = []
+        for i in enc_hiddens:
+            Y_all.append(self.fc1(i))
+        Y_all = torch.stack(Y_all)
         
-        return scores
+        Y_all = Y_all.permute(1,0,2)
+        Y_all = F.log_softmax(Y_all,dim=2)
+        
+        input_lengths =torch.full(size=(source.size(0),), fill_value=source.size(1), dtype=torch.long)
+        target_lengths = torch.Tensor(target_lengths).long() - 2 #减去起止符
+        # print(Y_all.size(),target_id.t().view(-1).size(),input_lengths,target_lengths)
+        # print(Y_all.shape,Y_all[2,0,:].shape,target_id.t())
+        closs = self.ctc_decoder(Y_all.contiguous(), target_id.t()[:,1:-1].view(-1).contiguous().cpu(), input_lengths, target_lengths)
+        # closs = torch.Tensor([math.inf])
+        # print(lloss,closs)
+        return lloss, closs.cuda()
 
 
-    def encode(self, source, source_lengths):
+    def encode(self, source):
         # source is the images list
 
         # ## 直接使用view来进行拼接，通过特征提取器一次完成提取工作。再使用view来还原维度。  有问题，内存爆炸：contiguous
@@ -97,18 +126,18 @@ class sign_language_model(nn.Module):
 
         # 单独一个一个输入，得到的再进行拼接
         feats = []
-        for i in source:
-            feat = self.feat_extraction(i) # 返回 (len,embed_size)
-            feats.append(feat) 
+        for i in torch.split(source, 1, dim=0):
+            i = i.view(i.size()[1:])
+            feat = self.feat_extraction(i) # 返回 (len,embed_size) 
+            feats.append(feat)
         feats = torch.stack(feats,1)  # 得到(len,b,embed_size)
         b = feats.size()[1]
 
-        h0 = torch.randn(2*self.enc_num_layers,b, self.hidden_size)
-        c0 = torch.randn(2*self.enc_num_layers,b, self.hidden_size)
+        h0 = torch.randn(2*self.enc_num_layers,b, self.hidden_size).requires_grad_()
+        c0 = torch.randn(2*self.enc_num_layers,b, self.hidden_size).requires_grad_()
         if self.args.gpus[0] > -1:
             h0 = h0.cuda()
             c0 = c0.cuda()
-        
         enc_hiddens,(Last_hidden,Last_cell)  = self.encoder(feats,(h0,c0))
         enc_hiddens = enc_hiddens.permute(1,0,2)  # => (batch_size, seq_len, hidden_size)
         # print('enc_hiddens',enc_hiddens.size())  #dim=3 (image_num batch_size  hidden_size*2: bidirection)
@@ -122,7 +151,9 @@ class sign_language_model(nn.Module):
 
     def decode(self, enc_hiddens, enc_masks, dec_init_state, target):
         # Chop of the <END> token for max length sentences.
-        target = target[:-1]
+        print(target.shape)
+        target = target[:-1,:]
+        print(target.shape)
 
         # Initialize the decoder state (hidden and cell)
         dec_state = dec_init_state
@@ -138,12 +169,12 @@ class sign_language_model(nn.Module):
         combined_outputs = []
         
         enc_hiddens_proj = self.att_projection(enc_hiddens)
-        Y = self.model_embeddings(target)
+
+        Y = self.model_embeddings(target) # target_id
 
         for Y_t in torch.split(Y,1):
-
             Y_t = torch.squeeze(Y_t,dim=0)
-            Ybar_t = torch.cat((Y_t,o_prev),dim=1)
+            Ybar_t = torch.cat((Y_t,o_prev),dim=1)  # decoder的输入等于hiddens(t-1)+embed(t) , 而o_prev一开始是0
             dec_state,o_t,e_t=self.step(Ybar_t,dec_state,enc_hiddens,enc_hiddens_proj,enc_masks)
             combined_outputs.append(o_t)
             o_prev = o_t
@@ -153,7 +184,6 @@ class sign_language_model(nn.Module):
         return combined_outputs
 
     def step(self, Ybar_t,dec_state,enc_hiddens,enc_hiddens_proj, enc_masks) :
- 
         combined_output = None
         dec_state = self.lstm_decoder(Ybar_t,dec_state)
         
@@ -191,7 +221,7 @@ class sign_language_model(nn.Module):
         enc_masks = torch.zeros(enc_hiddens.size(0), enc_hiddens.size(1), dtype=torch.float)
 
         for e_id, src_len in enumerate(source_lengths):
-            enc_masks[e_id, src_len:] = 1
+            enc_masks[e_id, src_len:] = 1 # self.vocab['<\s>']
         if self.args.gpus[0] > -1:
             enc_masks = enc_masks.cuda()
         return enc_masks
@@ -200,7 +230,7 @@ class sign_language_model(nn.Module):
         target_id = torch.ones((len(target),max([len(i) for i in target]))).long()
         for i in range(len(target)):
             for j in range(len(target[i])):
-                target_id[i][j] = self.vocab[target[i][j]]
+                target_id[i][j] = self.vocab[target[i][j]] if target[i][j] in self.vocab else self.vocab['<unk>']
         if self.args.gpus[0] > -1:
             target_id = target_id.cuda()
         return torch.t(target_id)
@@ -219,14 +249,13 @@ class sign_language_model(nn.Module):
         """
         # src_sents_var = self.vocab.to_input_tensor([src_picts], self.device)
 
-        src_encodings, dec_init_vec = self.encode(src_picts, [len(src_picts)])
+        src_encodings, dec_init_vec = self.encode(src_picts)
         src_encodings_att_linear = self.att_projection(src_encodings)
-
         h_tm1 = dec_init_vec
         att_tm1 = torch.zeros(1, self.hidden_size)
         if self.args.gpus[0] > -1:
             att_tm1 = att_tm1.cuda()
-
+        
         eos_id = self.vocab['</s>']
 
         hypotheses = [['<s>']]
@@ -240,7 +269,6 @@ class sign_language_model(nn.Module):
         while len(completed_hypotheses) < beam_size and t < max_decoding_time_step:
             t += 1
             hyp_num = len(hypotheses)
-
             exp_src_encodings = src_encodings.expand(hyp_num,
                                                      src_encodings.size(1),
                                                      src_encodings.size(2))
@@ -263,6 +291,7 @@ class sign_language_model(nn.Module):
             # log probabilities over target words
             # log_p_t = F.log_softmax(self.target_vocab_projection(att_t), dim=-1)
             log_p_t = F.log_softmax(self.fc2(att_t), dim=-1)
+            #print(log_p_t)
             live_hyp_num = beam_size - len(completed_hypotheses)
             contiuating_hyp_scores = (hyp_scores.unsqueeze(1).expand_as(log_p_t) + log_p_t).view(-1)
             top_cand_hyp_scores, top_cand_hyp_pos = torch.topk(contiuating_hyp_scores, k=live_hyp_num)
@@ -285,6 +314,7 @@ class sign_language_model(nn.Module):
                     completed_hypotheses.append(Hypothesis(value=new_hyp_sent[1:-1],
                                                            score=cand_new_hyp_score))
                 else:
+                    # print(new_hyp_sent)
                     new_hypotheses.append(new_hyp_sent)
                     live_hyp_ids.append(prev_hyp_id)
                     new_hyp_scores.append(cand_new_hyp_score)
@@ -307,8 +337,45 @@ class sign_language_model(nn.Module):
                                                    score=hyp_scores[0].item()))
 
         completed_hypotheses.sort(key=lambda hyp: hyp.score, reverse=True)
-
+        # print(completed_hypotheses)
+        # while(1): pass
         return completed_hypotheses
+
+    # def forward_vail(self, source, target, source_lengths, target_lengths):
+    #         """
+    #     @param source (List[List[str]]): list of source images, just one bunch
+    #     @param target (List[List[str]]): list of target sentence tokens of the source images, wrapped by `<s>` and `</s>`
+    #     @param source_lengths (List[int]): list of length of the source images
+    #     @param target_lengths (List[int]): list of length of the target sentence, wrapped by `<s>` and `</s>`
+
+    #     @returns scores (Tensor): a variable/tensor of shape (b, ) representing the
+    #                                 log-likelihood of generating the gold-standard target sentence for
+    #                                 each example in the input batch. Here b = batch size.
+    #     """
+    #     enc_hiddens, dec_init_state = self.encode(source)
+    #     target_id = self.word2id(target)# tokenizeis the transpose matrix
+    #     enc_masks = self.generate_sent_masks(enc_hiddens, source_lengths)
+    #     combined_outputs = self.decode(enc_hiddens, enc_masks, dec_init_state, target_id)
+    #     output = self.fc2(combined_outputs)
+    #     # print(output.argmax(2).view(-1),output.argmax(2).shape,target_id.view(-1),target_id.view(-1).shape)
+    #     return output.argmax(2).permute(1,0)
+
+    def load_pretrain(self, pretrain_file, skip=[]): ## 载入encode 预训练使用
+        pretrain_state_dict = torch.load(pretrain_file)
+        state_dict = self.state_dict()
+
+        keys = list(state_dict.keys())
+        for key in keys:
+            # #####
+            # if 'fc' in key: continue
+            # #####
+            if any(s in key for s in skip): continue
+            try:
+                state_dict[key] = pretrain_state_dict[key]
+            except:
+                print(key)
+
+        self.load_state_dict(state_dict)
 
 if __name__ == "__main__":
     torch.cuda.set_device(0)
