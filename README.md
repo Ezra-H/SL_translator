@@ -14,6 +14,7 @@ Translating a sign language video into a word or a sentence.
 - [Background](#background)
 - [Install](#install)
 - [Usage](#usage)
+- [Result](#Result)
 - [Contributing](#contributing)
 
 ## Background
@@ -49,14 +50,27 @@ Click this [link](https://github.com/baidu-research/warp-ctc) to install the war
 ## Usage
 
 ### training
+
+Executing the train.sh to train the network
+
 ```
-sh train.py
+sh train.sh
+```
+You can aslo directly execute the train.py to customize your training.
+```
+train.py [-h] [--train_src INPUT_DATA_PATH]    
+                   [--vail_src EVALUATE_DATA_PATH] [--vocab VOCABULATRY_PATH]    
+                   [--feature THE_TYPE_OF_FEATURE_EXTRACTOR]    
+                   [--fp16 ACTIVATE_THE_FP16]    
+                   ...
 ```
 
 ### vailing
 
+Executing the vail.sh to evaluate the network
+
 ```
-sh vail.py
+sh vail.sh
 ```
 
 ## Results
