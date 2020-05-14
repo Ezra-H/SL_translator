@@ -1,4 +1,5 @@
 import os
+import pandas as pd
 import torch.nn as nn
 
 
@@ -20,11 +21,19 @@ def read_corpus(file_path, stage='train', corpus_type='gloss'):
         data.append(sent)
     return data
 
+def read_corpus_from_csv(file_path):
+    csv = pd.read_csv(file_path)
+    corpus = csv['seq'].to_list()
 
 def read_vocab(file_path):
-    vocab = open(file_path).read()
-    vocab = vocab.split("\n")
+    vocab = pd.read_csv(file_path)['vocab'].to_list()
     vocab_dic = {vocab[j]: j for j in range(len(vocab))}
+    return vocab_dic
+
+def read_vocab_from_txt(file_path):
+    with open(file_path) as f:
+        vocab  = f.readlines()
+    vocab_dic = {vocab[j][:-1]: j for j in range(len(vocab))}
     return vocab_dic
 
 
