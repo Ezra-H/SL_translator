@@ -179,7 +179,7 @@ parser.add_argument(
     '--fp16',
     type=bool,
     default=True,
-    help='using fp16 to shrink the occupation of GPU (default True)'
+    help='using fp16 to shrink the occupation of GPU (default True)')
 
 def weights_init(m):
     classname = m.__class__.__name__
